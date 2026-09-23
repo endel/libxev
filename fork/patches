@@ -1,0 +1,8 @@
+# What the `quic-zig` branch carries on top of upstream main, applied in order.
+# Every line is a branch on endel/libxev, and each is, or will be, an upstream
+# PR. A line leaves this file when its PR merges upstream.
+#
+# branch               upstream PR   why we carry it
+kqueue-rearm-submit    #245          kqueue: a completion rearmed after submit() reported it stayed dead, so cancelling it did nothing
+pr-224                 #224          kqueue: tick(0) EV_DELETE flush, rearm state, queue corruption (bryanjeal's PR, plus a zig fmt of its tests). Stacked on kqueue-rearm-submit: both change rearm in submit()
+accept-nonblock        #246          epoll: accepted sockets were blocking on Linux, so a large write could stall the whole loop
