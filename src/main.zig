@@ -44,14 +44,14 @@ comptime {
     // from the main struct.
     const main = @This();
     const default = Backend.default().Api();
-    for (@typeInfo(default).@"struct".decls) |decl| {
-        const Decl = @TypeOf(@field(default, decl.name));
+    for (@typeInfo(default).@"struct".decl_names) |decl_name| {
+        const Decl = @TypeOf(@field(default, decl_name));
         if (Decl == void) continue;
-        if (!@hasDecl(main, decl.name)) {
-            @compileError("missing decl: " ++ decl.name);
+        if (!@hasDecl(main, decl_name)) {
+            @compileError("missing decl: " ++ decl_name);
         }
-        if (Decl != @TypeOf(@field(main, decl.name))) {
-            @compileError("decl has wrong type: " ++ decl.name);
+        if (Decl != @TypeOf(@field(main, decl_name))) {
+            @compileError("decl has wrong type: " ++ decl_name);
         }
     }
 }

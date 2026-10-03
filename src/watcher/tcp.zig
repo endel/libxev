@@ -518,13 +518,12 @@ fn TCPDynamic(comptime xev: type) type {
 fn TCPTests(comptime xev: type, comptime Impl: type) type {
     return struct {
         test "TCP: Stream decls" {
-            if (!@hasDecl(Impl, "S")) return;
             const Stream = Impl.S;
-            inline for (@typeInfo(Stream).@"struct".decls) |decl| {
-                const Decl = @TypeOf(@field(Stream, decl.name));
+            inline for (@typeInfo(Stream).@"struct".decl_names) |decl_name| {
+                const Decl = @TypeOf(@field(Stream, decl_name));
                 if (Decl == void) continue;
-                if (!@hasDecl(Impl, decl.name)) {
-                    @compileError("missing decl: " ++ decl.name);
+                if (!@hasDecl(Impl, decl_name)) {
+                    @compileError("missing decl: " ++ decl_name);
                 }
             }
         }
@@ -809,12 +808,15 @@ fn TCPTests(comptime xev: type, comptime Impl: type) type {
                 &std.mem.toBytes(@as(c_int, 8192)),
             );
 
-            const send_buf = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 0 } ** 100_000;
+            const send_buf = &struct {
+                var buf: [1_000_000]u8 = undefined;
+            }.buf;
+            for (send_buf, 0..) |*b, i| b.* = @intCast((i + 1) % 10);
             var sent_unqueued: usize = 0;
 
             // First we try to send the whole 1MB buffer in one write operation, this _should_ result
             // in a partial write.
-            client.write(&loop, &c_connect, .{ .slice = &send_buf }, usize, &sent_unqueued, (struct {
+            client.write(&loop, &c_connect, .{ .slice = send_buf }, usize, &sent_unqueued, (struct {
                 fn callback(
                     sent_unqueued_inner: ?*usize,
                     _: *xev.Loop,
@@ -911,7 +913,7 @@ fn TCPTests(comptime xev: type, comptime Impl: type) type {
 
             // Wait for the send/receive
             try loop.run(.until_done);
-            try testing.expectEqualSlices(u8, &send_buf, receiver.buf[0..receiver.bytes_read]);
+            try testing.expectEqualSlices(u8, send_buf, receiver.buf[0..receiver.bytes_read]);
             try testing.expect(send_buf.len == sent_unqueued + sent_queued);
 
             // Close

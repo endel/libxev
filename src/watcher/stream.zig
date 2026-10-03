@@ -87,7 +87,7 @@ pub fn Shared(comptime xev: type) type {
                     .io_uring,
                     .epoll,
                     => if (result.poll) |_|
-                        @enumFromInt(c.op.poll.events)
+                        @fromBackingInt(@intCast(c.op.poll.events))
                     else |err|
                         err,
 
@@ -145,8 +145,8 @@ fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) typ
             for (xev.candidates) |be| {
                 const CandidateT = @field(be.Api(), options.type.?);
                 const info = @typeInfo(CandidateT).@"struct";
-                for (info.decls) |decl| {
-                    if (std.mem.eql(u8, decl.name, "poll")) break;
+                for (info.decl_names) |decl_name| {
+                    if (std.mem.eql(u8, decl_name, "poll")) break;
                 } else return struct {};
             }
         }
@@ -1132,12 +1132,11 @@ pub fn GenericStream(comptime xev: type) type {
 fn GenericStreamTests(comptime xev: type, comptime Impl: type) type {
     return struct {
         test "Stream decls" {
-            if (!@hasDecl(Impl, "S")) return;
-            inline for (@typeInfo(Impl.S).@"struct".decls) |decl| {
-                const Decl = @TypeOf(@field(Impl.S, decl.name));
+            inline for (@typeInfo(Impl.S).@"struct".decl_names) |decl_name| {
+                const Decl = @TypeOf(@field(Impl.S, decl_name));
                 if (Decl == void) continue;
-                if (!@hasDecl(Impl, decl.name)) {
-                    @compileError("missing decl: " ++ decl.name);
+                if (!@hasDecl(Impl, decl_name)) {
+                    @compileError("missing decl: " ++ decl_name);
                 }
             }
         }

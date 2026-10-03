@@ -19,14 +19,7 @@ pub fn build(b: *std.Build) !void {
         bool,
         "emit-man-pages",
         "Set to true to build man pages. Requires scdoc. Defaults to true if scdoc is found.",
-    ) orelse if (b.findProgram(
-        &[_][]const u8{"scdoc"},
-        &[_][]const u8{},
-    )) |_|
-        true
-    else |err| switch (err) {
-        error.FileNotFound => false,
-    };
+    ) orelse (b.findProgram(.{ .names = &.{"scdoc"} }) != null);
 
     const emit_bench = b.option(
         bool,
@@ -88,7 +81,7 @@ pub fn build(b: *std.Build) !void {
     // pkg-config
     const pc: *Step.InstallFile = pc: {
         const file = b.addWriteFile("libxev.pc", b.fmt(
-            \\prefix={s}
+            \\prefix=${{pcfiledir}}/../..
             \\includedir=${{prefix}}/include
             \\libdir=${{prefix}}/lib
             \\
@@ -98,7 +91,7 @@ pub fn build(b: *std.Build) !void {
             \\Version: 0.1.0
             \\Cflags: -I${{includedir}}
             \\Libs: -L${{libdir}} -lxev
-        , .{b.install_prefix}));
+        , .{}));
         break :pc b.addInstallFileWithDir(
             file.getDirectory().path(b, "libxev.pc"),
             .prefix,
@@ -177,14 +170,8 @@ fn buildBenchmarks(
     var steps: std.ArrayList(*Step.Compile) = .empty;
     defer steps.deinit(alloc);
 
-    var dir = try std.Io.Dir.cwd().openDir(
-        io,
-        try b.build_root.join(
-            b.allocator,
-            &.{ "src", "bench" },
-        ),
-        .{ .iterate = true },
-    );
+    b.dependOnDirectoryContents(b.path("src/bench"));
+    var dir = try b.root.openDir(io, "src/bench", .{ .iterate = true });
     defer dir.close(io);
 
     // Go through and add each as a step
@@ -210,7 +197,7 @@ fn buildBenchmarks(
                     .{entry.name},
                 )),
                 .target = target,
-                .optimize = .ReleaseFast, // benchmarks are always release fast
+                .optimize = .fast, // benchmarks are always release fast
             }),
         });
         exe.root_module.addImport("xev", b.modules.get("xev").?);
@@ -225,7 +212,7 @@ fn buildBenchmarks(
 fn buildExamples(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     c_lib_: ?*Step.Compile,
 ) ![]const *Step.Compile {
     const io = b.graph.io;
@@ -233,14 +220,8 @@ fn buildExamples(
     var steps: std.ArrayList(*Step.Compile) = .empty;
     defer steps.deinit(alloc);
 
-    var dir = try std.Io.Dir.cwd().openDir(
-        io,
-        try b.build_root.join(
-            b.allocator,
-            &.{"examples"},
-        ),
-        .{ .iterate = true },
-    );
+    b.dependOnDirectoryContents(b.path("examples"));
+    var dir = try b.root.openDir(io, "examples", .{ .iterate = true });
     defer dir.close(io);
 
     // Go through and add each as a step
@@ -313,11 +294,8 @@ fn manPages(b: *std.Build) ![]const *Step {
     var steps: std.ArrayList(*Step) = .empty;
     defer steps.deinit(alloc);
 
-    var dir = try std.Io.Dir.cwd().openDir(
-        io,
-        try b.build_root.join(b.allocator, &.{"docs"}),
-        .{ .iterate = true },
-    );
+    b.dependOnDirectoryContents(b.path("docs"));
+    var dir = try b.root.openDir(io, "docs", .{ .iterate = true });
     defer dir.close(io);
 
     var it = dir.iterate();
