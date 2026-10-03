@@ -176,11 +176,11 @@ pub fn Xev(comptime bes: []const AllBackend) type {
 
         /// Helpers to convert between the subset/superset of backends.
         pub fn subset(comptime be: AllBackend) Backend {
-            return @enumFromInt(@intFromEnum(be));
+            return @fromBackingInt(@intCast(@backingInt(be)));
         }
 
         pub fn superset(comptime be: Backend) AllBackend {
-            return @enumFromInt(@intFromEnum(be));
+            return @fromBackingInt(@intCast(@backingInt(be)));
         }
 
         pub fn Union(comptime field: []const []const u8) type {
@@ -208,7 +208,7 @@ pub fn Xev(comptime bes: []const AllBackend) type {
             const testing = std.testing;
             try detect();
             inline for (bes) |be| {
-                if (@intFromEnum(be) == @intFromEnum(backend)) {
+                if (@backingInt(be) == @backingInt(backend)) {
                     try testing.expect(be.Api().available());
                     break;
                 }
@@ -219,7 +219,7 @@ pub fn Xev(comptime bes: []const AllBackend) type {
             const testing = std.testing;
             try testing.expect(prefer(bes[0]));
             inline for (bes) |be| {
-                if (@intFromEnum(be) == @intFromEnum(backend)) {
+                if (@backingInt(be) == @backingInt(backend)) {
                     try testing.expect(be.Api().available());
                     break;
                 }
@@ -432,7 +432,7 @@ fn EnumSubset(comptime T: type, comptime values: []const T) type {
     var field_values: [values.len]tag_type = undefined;
     for (values, 0..) |value, i| {
         field_names[i] = @tagName(value);
-        field_values[i] = @intFromEnum(value);
+        field_values[i] = @backingInt(value);
     }
 
     return @Enum(tag_type, .exhaustive, &field_names, &field_values);
@@ -461,7 +461,7 @@ fn Union(
 
     var field_names: [bes.len + 1][:0]const u8 = undefined;
     var field_types: [bes.len + 1]type = undefined;
-    var field_attrs: [bes.len + 1]std.builtin.Type.UnionField.Attributes = @splat(.{});
+    var field_attrs: [bes.len + 1]std.lang.Type.Union.FieldAttributes = @splat(.{});
     for (bes, 0..) |be, i| {
         var T: type = be.Api();
         for (field) |f| T = @field(T, f);
