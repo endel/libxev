@@ -1,0 +1,14 @@
+# What the `quic-zig` branch carries on top of upstream main, applied in order.
+# Every line is a branch on endel/libxev, and each is, or will be, an upstream
+# PR. A line leaves this file when its PR merges upstream.
+#
+# branch               upstream PR   why we carry it
+kqueue-rearm-submit    #245          kqueue: a completion rearmed after submit() reported it stayed dead, so cancelling it did nothing
+pr-224                 #224          kqueue: tick(0) EV_DELETE flush, rearm state, queue corruption (bryanjeal's PR, plus a zig fmt of its tests). Stacked on kqueue-rearm-submit: both change rearm in submit()
+kqueue-receipts        #257          kqueue: more than 256 ready registrations at once queued a completion twice, running its callback again after it was freed, and tick() wrote past its change list onto the stack. Stacked on pr-224: both change submit() and tick()'s completion queue
+accept-nonblock        #246          epoll: accepted sockets were blocking on Linux, so a large write could stall the whole loop
+send-nosignal          #247          epoll, io_uring, kqueue: a send to a peer that had gone raised SIGPIPE, killing a process that hadn't ignored it; kqueue also reported EPIPE as Unexpected
+iocp-poll              #240          iocp: no readiness operation, so Stream.poll was a compile error on Windows
+timer-timeout-spin     #254          epoll, kqueue, iocp: a timer due later in the current millisecond got a zero timeout, so the loop polled without waiting until it was due
+timer-after-wait       #255          epoll, iocp: a timer started from an I/O callback counted from the time read before the wait, so it fired early by the wait's length, or at once
+libc-clock             #256          epoll, io_uring: with libc linked, every update_now was a clock_gettime syscall: std.os.linux finds the vDSO only from Zig's own startup code
