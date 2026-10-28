@@ -229,21 +229,14 @@ pub const Loop = struct {
             // submission queue and we're done.
             if (events_len == 0) break;
 
-            // Zero timeout so that kevent returns immediately.
-            var timeout = std.mem.zeroes(posix.timespec);
-            const completed = try kevent_syscall(
-                self.kqueue_fd,
-                events[0..events_len],
-                events[0..events.len],
-                &timeout,
-            );
+            // Receipts only: what is already ready comes through the wait
+            // in tick. Draining events here reported a level-triggered
+            // completion once per batch, queueing it twice, and left it
+            // registered while queued, so the wait could run it again.
+            const receipts = try applyChanges(self.kqueue_fd, events[0..events_len]);
             events_len = 0;
 
-            // Go through the completed events and queue them.
-            // NOTE: we currently never process completions (we set
-            // event list to zero length) because it was leading to
-            // memory corruption we need to investigate.
-            for (events[0..completed]) |ev| {
+            for (receipts) |ev| {
                 // Zero udata values are internal events that we do nothing
                 // on such as the mach port wakeup.
                 if (ev.udata == 0) continue;
@@ -251,19 +244,13 @@ pub const Loop = struct {
                 // We handle deletions separately.
                 if (ev.flags & std.c.EV.DELETE != 0) continue;
 
+                // Registered: its event comes through the wait.
+                if (ev.data == 0) continue;
+
+                // Submission failed for this completion: the syscall error
+                // code is in data.
                 const c: *Completion = @ptrFromInt(@as(usize, @intCast(ev.udata)));
-
-                // If EV_ERROR is set, then submission failed for this
-                // completion. We get the syscall errorcode from data and
-                // store it.
-                if (ev.flags & std.c.EV.ERROR != 0) {
-                    c.result = c.syscall_result(-@as(i32, @intCast(ev.data)));
-                } else {
-                    // No error, means that this completion is ready to work.
-                    c.result = c.perform(&ev);
-                }
-
-                assert(c.result != null);
+                c.result = c.syscall_result(-@as(i32, @intCast(ev.data)));
                 c.next = null;
                 self.completions.push(c);
             }
@@ -417,20 +404,15 @@ pub const Loop = struct {
                 }
             }
 
-            // Process the completions we already have completed.
+            // Process the completions we already have completed. None of
+            // them is registered with kqueue: submit() queues only the
+            // changes that failed, so nothing here needs deleting.
             while (self.completions.pop()) |c| {
-                // disarm_ev is the Kevent to use for disarming if the
-                // completion wants to disarm. We have to calculate this up
-                // front because c can be reused in callback.
-                const disarm_ev: ?Kevent = ev: {
-                    // If we're not active then we were never part of the kqueue.
-                    // If we are part of a threadpool we also never were part
-                    // of the kqueue.
-                    if (c.flags.state != .active or
-                        c.flags.threadpool) break :ev null;
-
-                    break :ev c.kevent();
-                };
+                // A kevent operation whose registration failed, which a rearm
+                // registers again. Read up front because c can be reused in
+                // the callback.
+                const failed_kevent = c.flags.state == .active and
+                    !c.flags.threadpool and c.kevent() != null;
 
                 // We store whether this completion was active so we can decrement
                 // the active count later
@@ -443,35 +425,19 @@ pub const Loop = struct {
                 // Completion queue items MUST have a result set.
                 const action = c.callback(c.userdata, self, c, c.result.?);
                 switch (action) {
-                    // If we're active we have to schedule a delete. Otherwise
-                    // we do nothing because we were never part of the kqueue.
-                    .disarm => {
-                        if (disarm_ev) |ev| {
-                            events[changes] = ev;
-                            events[changes].flags = std.c.EV.DELETE;
-                            events[changes].udata = 0;
-                            changes += 1;
-                            assert(changes <= events.len);
-                        }
-
-                        if (c_active) self.active -= 1;
+                    .disarm => if (c_active) {
+                        self.active -= 1;
                     },
 
-                    // Still registered with kqueue (reported by submit's event
-                    // list): it must stay active, or its next event queues it twice.
-                    // Never registered (close, shutdown, ...): resubmit as .adding,
-                    // since submit stops a .dead completion instead of starting it.
-                    .rearm => if (disarm_ev != null) {
-                        c.flags.state = .active;
-                        c.result = null;
-                    } else if (!c_active) {
+                    // Resubmit as .adding, since submit stops a .dead
+                    // completion instead of starting it. start() counts it
+                    // active again.
+                    .rearm => if (!c_active or failed_kevent) {
+                        if (c_active) self.active -= 1;
                         c.flags.state = .adding;
                         self.submissions.push(c);
                     },
                 }
-
-                // If we filled the events slice, we break to avoid overflow.
-                if (changes == events.len) break;
             }
 
             // Determine our next timeout based on the timers
@@ -1874,6 +1840,16 @@ const Kevent = switch (builtin.os.tag) {
     else => @compileError("kqueue not supported yet for target OS"),
 };
 
+/// Applies `changes` without taking any pending event: each change returns
+/// one receipt in its own slot (EV_ERROR, with data zero on success), and an
+/// event list exactly that long leaves the kernel no room to scan for more.
+fn applyChanges(kq: i32, changes: []Kevent) KEventError![]Kevent {
+    for (changes) |*ev| ev.flags |= std.c.EV.RECEIPT;
+    var timeout = std.mem.zeroes(posix.timespec);
+    const n = try kevent_syscall(kq, changes, changes, &timeout);
+    return changes[0..n];
+}
+
 /// kevent calls either kevent or kevent64 depending on the
 /// target platform.
 fn kevent_syscall(
@@ -2881,8 +2857,7 @@ test "kqueue: cancel after a rearm of a completion reported at submit" {
     defer _ = std.c.close(fds[0]);
     defer _ = std.c.close(fds[1]);
 
-    // Readable before submission, so submit's event list reports it and the
-    // callback runs from the completion queue.
+    // Readable before submission, so the first wait reports it.
     try testing.expectEqual(@as(isize, 1), std.c.write(fds[1], "a", 1));
 
     const State = struct { reads: usize = 0, canceled: bool = false };
@@ -3120,6 +3095,59 @@ test "kqueue: tick(0) no-op when nothing pending" {
     defer loop.deinit();
 
     try loop.run(.no_wait);
+    try testing.expectEqual(@as(usize, 0), loop.active);
+}
+
+test "kqueue: more ready reads than one submit batch each complete once" {
+    // Readable before they're submitted: submit() registers them 256 at a
+    // time. Taking events with each batch reported the earlier batches
+    // again, queueing a completion twice, and left them registered while
+    // queued, so the wait ran them a second time.
+    const testing = std.testing;
+    const n = 600;
+
+    var limit = try posix.getrlimit(.NOFILE);
+    if (limit.cur < 2 * n) {
+        if (limit.max < 2 * n) return error.SkipZigTest;
+        limit.cur = 2 * n;
+        try posix.setrlimit(.NOFILE, limit);
+    }
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const readers = try testing.allocator.alloc(posix.fd_t, n);
+    defer testing.allocator.free(readers);
+    const completions = try testing.allocator.alloc(Completion, n);
+    defer testing.allocator.free(completions);
+    const calls = try testing.allocator.alloc(u8, n);
+    defer testing.allocator.free(calls);
+    @memset(calls, 0);
+    var bufs: [n][1]u8 = undefined;
+
+    for (readers, completions, calls, &bufs) |*fd, *c, *count, *buf| {
+        const p = try makePipe();
+        _ = try xev_posix.write(p[1], &[_]u8{1});
+        xev_posix.close(p[1]);
+        fd.* = p[0];
+        c.* = .{
+            .op = .{ .read = .{ .fd = p[0], .buffer = .{ .slice = buf } } },
+            .userdata = count,
+            .callback = (struct {
+                fn callback(ud: ?*anyopaque, _: *Loop, _: *Completion, r: Result) CallbackAction {
+                    _ = r.read catch unreachable;
+                    const k: *u8 = @ptrCast(ud.?);
+                    k.* += 1;
+                    return .disarm;
+                }
+            }).callback,
+        };
+        loop.add(c);
+    }
+    defer for (readers) |fd| xev_posix.close(fd);
+
+    try loop.run(.until_done);
+    for (calls) |count| try testing.expectEqual(@as(u8, 1), count);
     try testing.expectEqual(@as(usize, 0), loop.active);
 }
 
