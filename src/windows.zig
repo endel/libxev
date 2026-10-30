@@ -592,7 +592,9 @@ pub const afd = struct {
 // --- High-level wrapper functions ---
 
 pub fn unexpectedWSAError(err: ws2_32.WinsockError) error{Unexpected} {
-    return unexpectedError(@as(Win32Error, @enumFromInt(@intFromEnum(err))));
+    // Not `unexpectedError`: WSA codes aren't in `Win32Error`, and casting one panics.
+    std.log.debug("unexpected Winsock error: {d}", .{@intFromEnum(err)});
+    return error.Unexpected;
 }
 
 pub fn QueryPerformanceCounter() u64 {
